@@ -62,6 +62,7 @@ func sendauthcmd(id string, conn *net.TCPConn) {
 	checksumbyte := authcmd[1:len(authcmd)]
 	checksum := CheckSum(checksumbyte, uint16(len(checksumbyte)))
 	authcmd = append(authcmd, checksum)
+	//authcmd = append(authcmd, 1)
 	authcmd = append(authcmd, 0x7e)
 	log.Printf("%x\n", authcmd)
 
@@ -103,7 +104,7 @@ func addtime() []byte {
 
 }
 
-func sendposcmd(id string, conn *net.TCPConn) {
+func sendposcmd(id string, conn *net.TCPConn, wg *sync.WaitGroup) bool {
 	poscmd := []byte{0x7e, 0x02, 0x00, 0x00, 0x4c}
 	poscmd = append(poscmd, getidbcd(id)...)
 	poscmd = append(poscmd, 0)
@@ -119,17 +120,24 @@ func sendposcmd(id string, conn *net.TCPConn) {
 	poscmd = append(poscmd, []byte{0x25, 0x04, 0x00, 0x00, 0x00, 0x00}...)
 	poscmd = append(poscmd, []byte{0x30, 0x01, 0x13}...)
 	poscmd = append(poscmd, []byte{0x31, 0x01, 0x12}...)
-	poscmd = append(poscmd, []byte{0xe3, 0x10, 0x5a, 0x06, 0x01, 0x5f, 0x01, 0x5f, 0x01, 0x5f, 0x5b, 0x06, 0x01, 0x5f, 0x01, 0x5f, 0x01, 0x5f}...)
+	poscmd = append(poscmd, []byte{0xe3, 0x10, 0x5a, 0x06, 0x02, 0x34, 0x02, 0x34, 0x01, 0x5f, 0x5b, 0x06, 0x01, 0x5f, 0x01, 0x5f, 0x01, 0x5f}...)
 	poscmd = append(poscmd, []byte{0xe4, 0x06, 0x01, 0x19, 0x01, 0x1a, 0x01, 0x1b}...)
 	checksumbyte := poscmd[1:len(poscmd)]
 	checksum := CheckSum(checksumbyte, uint16(len(checksumbyte)))
 	poscmd = append(poscmd, checksum)
 	poscmd = append(poscmd, 0x7e)
+	//poscmd := []byte{0x7e, 0x02, 0x00, 0x00, 0x40, 0x01, 0x38, 0x32, 0x35, 0x73, 0x52, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x03, 0x02, 0x42, 0x70, 0x2d, 0x06, 0xd8, 0x63, 0xa5, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x15, 0x09, 0x28, 0x18, 0x21, 0x26, 0x01, 0x04, 0x00, 0x00, 0x01, 0x25, 0x03, 0x02, 0x00, 0x00, 0x25, 0x04, 0x00, 0x00, 0x00, 0x00, 0x30, 0x01, 0x1a, 0x31, 0x01, 0x15, 0xe3, 0x08, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0xe4, 0x02, 0x00, 0x00, 0x6a, 0x7e}
+	log.Printf("%x\n", poscmd)
 
 	_, err := conn.Write(poscmd)
 	if err != nil {
 		log.Println(err.Error())
+		go do(id, wg)
+
+		return false
 	}
+
+	return true
 
 }
 
@@ -142,6 +150,7 @@ var failpos uint32 = 0
 func do(id string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	srvaddr := "211.142.200.228:10054"
+	//srvaddr := "192.168.2.111:9000"
 	tcpaddr, _ := net.ResolveTCPAddr("tcp", srvaddr)
 
 	conn, err := net.DialTCP("tcp", nil, tcpaddr)
@@ -156,14 +165,17 @@ func do(id string, wg *sync.WaitGroup) {
 
 	sendauthcmd(id, conn)
 	buffer := make([]byte, 1024)
-	conn.Read(buffer)
+	_, err = conn.Read(buffer)
 	//if buffer[17] == 0 {
-	if true {
+	if err == nil {
 		ticker := time.NewTicker(1 * 1e9)
+		successauth++
 
 		for {
 			<-ticker.C
-			sendposcmd(id, conn)
+			if !sendposcmd(id, conn, wg) {
+				return
+			}
 			conn.Read(buffer)
 			if buffer[17] == 0 {
 				successpos++
@@ -171,8 +183,9 @@ func do(id string, wg *sync.WaitGroup) {
 				failpos++
 			}
 		}
-		successauth++
 	} else {
+		log.Println("auth err")
+		log.Println(err.Error())
 		failauth++
 	}
 
@@ -199,7 +212,7 @@ func main() {
 		ticker := time.NewTicker(5 * time.Second)
 		for {
 			<-ticker.C
-			log.Printf("success auth %d, fail auth %d, pos success %d, fail auth %d", successauth, failauth, successpos, failpos)
+			log.Printf("success auth %d, fail auth %d, pos success %d, pos fail %d", successauth, failauth, successpos, failpos)
 		}
 	}()
 	// Handle SIGINT and SIGTERM.
